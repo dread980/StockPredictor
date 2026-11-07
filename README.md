@@ -29,6 +29,7 @@ a bug.
 - [Install](#install)
 - [Usage](#usage)
 - [How to read the output](#how-to-read-the-output)
+- [Dashboard](#dashboard)
 - [Configuration](#configuration)
 - [Repository layout](#repository-layout)
 - [Docker](#docker)
@@ -42,14 +43,15 @@ a bug.
 
 ## Quickstart
 
-Requires Python 3.10 or newer.
+Requires Python 3.10 or newer. The dashboard adds one more thing: Node 18 or newer, for the
+Vite front end.
 
 ```bash
 git clone https://github.com/<your-username>/stockpred.git
 cd stockpred
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[data,app,dev]"
+pip install -e ".[data,api,dev]"
 
 stockpred run                      # fetch, train, backtest, forecast, rank, read
 ```
@@ -59,11 +61,15 @@ environment the first time and then runs everything.
 
 ```powershell
 .\run.cmd                 # fetch, train, backtest, forecast, rank, read
-.\run.cmd --app           # the same, then open the dashboard
+.\run.cmd --app           # the same, then serve the dashboard
+.\run.cmd serve           # serve the dashboard on its own, skipping the pipeline
 .\run.cmd --tune          # the same, with a hyperparameter search (slow)
 .\run.cmd --report        # the same, plus an HTML tear sheet per symbol
 .\run.cmd --help          # every other flag
 ```
+
+`run.cmd serve` starts the API and opens the dashboard in a browser. The first run installs
+the front-end packages, which happens once.
 
 `stockpred run` skips tuning by default because the hyperparameter search is the slow
 part. Pass `--tune` when you want it.
@@ -137,18 +143,19 @@ here is credibility. These choices make the results hard to fake:
 
 ## Install
 
-Requires Python 3.10 or newer. From the repository root:
+Requires Python 3.10 or newer. The dashboard adds one more thing: Node 18 or newer, for the
+Vite front end. From the repository root:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[data,app,dev]"
+pip install -e ".[data,api,dev]"
 ```
 
 | Extra | Adds |
 | --- | --- |
 | `data` | `yfinance` for price history |
-| `app` | Streamlit and Plotly for the dashboard |
+| `api` | FastAPI and Uvicorn, which serve the dashboard's endpoints, plus Plotly, which draws the figures the front end renders |
 | `dev` | Test and lint tooling |
 
 Heavy optional libraries are **never required**. The code degrades gracefully and logs
@@ -180,7 +187,7 @@ options.
 | `stockpred screen` | Rank a universe by expected risk-adjusted return |
 | `stockpred report TCS.NS --pdf` | Write a tear sheet (the PDF is attempted when `--pdf` is given) |
 | `stockpred ask "why did the model turn bearish?" --symbol TCS.NS` | Answer from the stored records, with citations |
-| `stockpred app` | Launch the Streamlit dashboard |
+| `stockpred serve` | Serve the dashboard (API + front end) on its own |
 
 Symbols use Yahoo Finance tickers: `.NS` for NSE (for example `RELIANCE.NS`) and `.BO` for
 BSE.
@@ -215,6 +222,32 @@ backtest; the keys only enable optional integrations.
 cp .env.example .env
 ```
 
+## Dashboard
+
+`stockpred serve` (or `.\run.cmd serve`) starts the dashboard. It is a Vite + React app talking
+to a FastAPI process over `/api`:
+
+- In development Vite serves on `http://127.0.0.1:5173` and proxies `/api` to the API on port
+  `8000`.
+- After `npm run build` inside `web/`, the API serves the compiled files from `web/dist` at `/`,
+  so the whole dashboard is one port. `stockpred serve` builds nothing; it starts Vite when
+  `web/dist` is missing and serves the static bundle when it is not. Pass `--dev` to force Vite.
+
+There are two modes, switched at the top right of the page:
+
+- **Simple** (the default) - the Home page is one button. Search a stock, press **Run everything**,
+  and read a single card per symbol: the signal, the expected move, the likely range, the cost
+  hurdle and a plain-words reason.
+- **Advanced** - the full set of pages, with the technical names, the expert settings and the
+  charts.
+
+Every picker accepts a company name as well as a ticker ("tata motors" resolves to
+`TATAMOTORS.NS`), and a preset or saved watchlist can be loaded in one click. Stock lists
+default to the universe in `configs/default.yaml`; the *Compare* and *Screener* pages take
+any number of tickers at once.
+
+The API is documented for free: run the server and open `http://127.0.0.1:8000/docs`.
+
 ## Repository layout
 
 ```text
@@ -238,6 +271,7 @@ stockpred/
 │   │   ├── validation.py       # quality checks, split/dividend handling
 │   │   ├── calendar.py         # NSE trading days and holidays
 │   │   ├── market_context.py   # Nifty, VIX, USD/INR, sector indices
+│   │   ├── tickers.py          # name/ticker search, presets and watchlists
 │   │   └── events.py           # results dates, corporate actions, flows
 │   ├── features/
 │   │   ├── indicators.py       # pure functions, no shifting inside
@@ -282,23 +316,38 @@ stockpred/
 │   ├── reporting/
 │   │   ├── tearsheet.py        # HTML/PDF report
 │   │   └── alerts.py           # Telegram / email
-│   ├── viz/plots.py            # plotly figures, shared by UI and reports
+│   ├── viz/plots.py            # plotly figures, shared by the API and reports
+│   ├── api/
+│   │   ├── app.py              # FastAPI endpoints over the pipelines
+│   │   └── serial.py           # the JSON boundary; NaN becomes null
 │   └── cli.py                  # typer entry point
-├── app/
-│   ├── Home.py                 # Streamlit entry
-│   └── pages/
-│       ├── 1_Data.py
-│       ├── 2_Models.py
-│       ├── 3_Backtest.py
-│       ├── 4_Signals.py
-│       ├── 5_Screener.py
-│       └── 6_Diagnostics.py    # Reality Check, drift, regimes
+├── web/                        # the dashboard: Vite + React (plain JavaScript)
+│   ├── package.json
+│   ├── vite.config.js          # dev proxy to :8000, vitest config
+│   ├── index.html
+│   └── src/
+│       ├── main.jsx            # the router
+│       ├── api.js              # one function per endpoint
+│       ├── state.jsx           # config, Simple/Advanced, selected symbols
+│       ├── format.js           # number and date formatting
+│       ├── styles.css          # the design tokens and every component class
+│       ├── charts/Plot.jsx     # Plotly.js renders the figure JSON
+│       ├── components/         # layout, symbol picker, verdict, tables
+│       ├── pages/              # Home, Data, Models, Backtest, Signals,
+│       │                       #   Screener, Compare, Diagnostics
+│       └── test/               # vitest page, client and formatter tests
 ├── tests/
-│   ├── test_indicators.py
-│   ├── test_leakage.py
-│   ├── test_costs.py
+│   ├── test_indicators.py      # indicator values and causality
+│   ├── test_leakage.py         # future-perturbation canary
+│   ├── test_costs.py           # the Indian cost model
 │   ├── test_backtest_accounting.py
-│   └── test_splits.py
+│   ├── test_splits.py          # purged folds, gap and embargo
+│   ├── test_persistence.py     # bundle round-trip
+│   ├── test_experiments.py     # run ledger
+│   ├── test_analyst.py         # grounded answers cite their sources
+│   ├── test_predict_signal.py  # a forecast that cannot pay for itself abstains
+│   ├── test_tickers.py         # name search, presets and watchlists
+│   └── test_api.py             # the HTTP layer behind the dashboard
 ├── notebooks/                  # exploration only, never imported
 └── artifacts/                  # cache, models, reports (git-ignored)
 ```
@@ -308,11 +357,13 @@ data layer never depends on the UI.
 
 ## Docker
 
-Build the image and run the Streamlit app:
+The image is built in two stages: Node compiles the frontend, then the compiled files are
+copied into the Python image, which serves them from the API. Node never reaches the final
+image.
 
 ```bash
 docker build -t stockpred .
-docker run --rm -p 8501:8501 -v "$PWD/artifacts:/app/artifacts" stockpred
+docker run --rm -p 8000:8000 -v "$PWD/artifacts:/app/artifacts" stockpred
 ```
 
 Or with Compose:
@@ -321,21 +372,28 @@ Or with Compose:
 docker compose up
 ```
 
-Then open <http://localhost:8501>. Mount `artifacts/` so the parquet cache, saved model
-bundles and generated reports persist between runs. Without the mount they are lost when
-the container exits.
+The dashboard is then at `http://127.0.0.1:8000/`. Mount `artifacts/` so the parquet cache,
+saved model bundles and generated reports persist between runs; without the mount they are
+lost when the container exits.
 
 ## Development
 
 ```bash
-pytest
+pytest                        # the Python suite
 ruff check .
 black .
+mypy
+
+cd web                        # the front-end suite
+npm test
+npm run build
 ```
 
-The test suite covers indicator values, the leakage canary, the cost model, backtest
-accounting (cash plus positions equals equity), the split logic and the persistence round
-trip.
+The Python suite covers indicator values, the leakage canary, the cost model, backtest
+accounting (cash plus positions equals equity), the split logic, the persistence round trip,
+the ticker search and watchlists, the abstain rule for a forecast that cannot pay for itself,
+and the HTTP layer behind the dashboard. The front-end suite mounts all eight pages headless
+in jsdom and checks the API client and the formatters.
 
 If you add a feature, add it to `features/indicators.py` as a pure function with no
 shifting inside, and let `features/builder.py` do the single shift. The leakage canary

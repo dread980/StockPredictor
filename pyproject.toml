@@ -28,13 +28,17 @@ boosting = ["xgboost>=2.0", "lightgbm>=4.0"]
 tuning = ["optuna>=3.4"]
 explain = ["shap>=0.44"]
 validate = ["pandera>=0.19"]
-app = ["streamlit>=1.30", "plotly>=5.18"]
+# The browser dashboard talks to the FastAPI layer; plotly is still needed on
+# this side because the chart builders produce the figure JSON the frontend
+# renders, and the tear sheet writer emits HTML.
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "plotly>=5.18"]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "ruff>=0.4",
     "black>=24.0",
     "mypy>=1.8",
+    "httpx2>=0.28",
 ]
 
 [project.scripts]
@@ -58,7 +62,7 @@ target-version = ["py310"]
 [tool.mypy]
 python_version = "3.10"
 files = ["src/stockpred"]
-# The scientific stack and the optional boosting/shap/streamlit extras ship
+# The scientific stack and the optional boosting/shap extras ship
 # no stubs, and several are not even installed in a bare environment, so
 # unresolved third-party imports are treated as Any rather than errors.
 ignore_missing_imports = true
